@@ -1,36 +1,50 @@
-// =============================================================================
-// DATABASE Connection
-// =============================================================================
-
 import mongoose from "mongoose";
 import { GridFSBucket } from "mongodb";
 
-if (!process.env.MONGODBURI) {
-  console.error("❌ MONGODBURI is missing from .env");
-} else {
-  mongoose
-    .connect(process.env.MONGODBURI)
-    .then(() => {
-      console.log("=================================");
-      console.log("✅ Database connected successfully");
-      console.log("=================================");
-    })
-    .catch((error) => {
-      console.log("❌ Database not connected successfully..");
-      console.error(error);
-    });
+// ======================================================
+// DATABASE CONNECTION
+// ======================================================
+
+const MONGODB_URI = process.env.MONGODBURI;
+
+if (!MONGODB_URI) {
+  throw new Error(
+    "MONGODBURI is missing. Configure it in Render Environment Variables."
+  );
 }
 
-// =============================================================================
-// GridfsBucket  for media upload
-// =============================================================================
-
-let gridfsbucket;
-mongoose.connection.once("open", () => {
-  gridfsbucket = new GridFSBucket(mongoose.connection.db, {
-    bucketName: "media",
+try {
+  await mongoose.connect(MONGODB_URI, {
+    serverSelectionTimeoutMS: 15000,
   });
-  console.log("✅ GridFSBucket initialized");
+
+  console.log("=================================");
+  console.log("Database connected successfully");
+  console.log("=================================");
+
+} catch (error) {
+  console.error("MongoDB connection failed:", error.message);
+  throw error;
+}
+
+// ======================================================
+// GRIDFS BUCKET
+// ======================================================
+
+export let gridfsbucket;
+
+if (!mongoose.connection.db) {
+  throw new Error("MongoDB connection is not initialized.");
+}
+
+gridfsbucket = new GridFSBucket(mongoose.connection.db, {
+  bucketName: "media",
 });
 
-export { mongoose, gridfsbucket };
+console.log("GridFSBucket initialized");
+
+// ======================================================
+// EXPORTS
+// ======================================================
+
+export { mongoose };
