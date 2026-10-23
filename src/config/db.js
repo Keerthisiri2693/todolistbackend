@@ -1,3 +1,4 @@
+
 import mongoose from "mongoose";
 import { GridFSBucket } from "mongodb";
 
@@ -19,11 +20,11 @@ try {
   });
 
   console.log("=================================");
-  console.log("Database connected successfully");
+  console.log("✅ Database connected successfully");
+  console.log("Database:", mongoose.connection.name);
   console.log("=================================");
-
 } catch (error) {
-  console.error("MongoDB connection failed:", error.message);
+  console.error("❌ MongoDB connection failed:", error);
   throw error;
 }
 
@@ -31,7 +32,7 @@ try {
 // GRIDFS BUCKET
 // ======================================================
 
-export let gridfsbucket;
+export let gridfsbucket = null;
 
 if (!mongoose.connection.db) {
   throw new Error("MongoDB connection is not initialized.");
@@ -41,10 +42,6 @@ gridfsbucket = new GridFSBucket(mongoose.connection.db, {
   bucketName: "media",
 });
 
-console.log("GridFSBucket initialized");
-
-// ======================================================
-// EXPORTS
-// ======================================================
+console.log("✅ GridFSBucket initialized");
 
 export { mongoose };
