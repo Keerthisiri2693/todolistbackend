@@ -1,22 +1,15 @@
-// ======================================================
-// ENVIRONMENT
-// ======================================================
 
 import "dotenv/config";
-
-// ======================================================
-// IMPORTS
-// ======================================================
 
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
 import bodyParser from "body-parser";
 import http from "http";
+
 import { TodolistSchema } from "./src/models/todolistModels.js";
 import { scheduleAlarm } from "./src/Helper/alarm.js";
-import "./src/config/db.js"; // ensures DB + GridFSBucket initialized
-
+import "./src/config/db.js";
 import { initiateApp } from "./src/Helper/apiHelper.js";
 import { seed } from "./src/routes/seedTemplates.js";
 
@@ -25,17 +18,12 @@ import { seed } from "./src/routes/seedTemplates.js";
 // ======================================================
 
 process.on("uncaughtException", (error) => {
-  console.error("");
-  console.error("❌ UNCAUGHT EXCEPTION");
-  console.error(error);
-  console.error("");
+  console.error("UNCAUGHT EXCEPTION:", error);
+  process.exit(1);
 });
 
 process.on("unhandledRejection", (reason) => {
-  console.error("");
-  console.error("❌ UNHANDLED REJECTION");
-  console.error(reason);
-  console.error("");
+  console.error("UNHANDLED REJECTION:", reason);
 });
 
 // ======================================================
@@ -43,49 +31,56 @@ process.on("unhandledRejection", (reason) => {
 // ======================================================
 
 const app = express();
-app.get("/api/userLoginOrLogout1", (req, res) => {
-  res.send("Login route works!");
-});
-
 const port = Number(process.env.PORT) || 5003;
 
 // ======================================================
 // CORS
 // ======================================================
 
-
 app.use(
   cors({
     origin: "*",
-
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-
     allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
 
 // ======================================================
-// BODY PARSER
+// BODY PARSERS
 // ======================================================
 
-app.use(
-  express.json({
-    limit: "50mb",
-  }),
-);
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-app.use(
-  bodyParser.json({
-    limit: "50mb",
-  }),
-);
+// Keep the existing bodyParser JSON middleware if your API
+// requires it. express.json() above already handles JSON bodies.
 
-app.use(
-  bodyParser.urlencoded({
-    extended: true,
-    limit: "50mb",
-  }),
-);
+// ======================================================
+// HEALTH CHECK ROUTES
+// ======================================================
+
+app.get("/", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Todo List Backend API is running",
+    status: "healthy",
+  });
+});
+
+app.get("/health", (req, res) => {
+  const databaseConnected = mongoose.connection.readyState === 1;
+
+  res.status(databaseConnected ? 200 : 503).json({
+    success: databaseConnected,
+    server: "running",
+    database: databaseConnected ? "connected" : "disconnected",
+  });
+});
+
+// Existing test route
+app.get("/api/userLoginOrLogout1", (req, res) => {
+  res.status(200).send("Login route works!");
+});
 
 // ======================================================
 // EXISTING API ROUTES
@@ -94,95 +89,105 @@ app.use(
 initiateApp(app);
 
 // ======================================================
-// INITIATE REMINDER
-// ======================================================
-
-const initAlarms = async () => {
-  console.log("Reminder Check");
-  const tasks = await TodolistSchema.find({ alarm: { $ne: null } });
-  tasks.forEach((task) => scheduleAlarm(task));
-};
-initAlarms();
-// ======================================================
-// Seed Templated
-// ======================================================
-seed();
-// ======================================================
 // HTTP SERVER
 // ======================================================
 
 const server = http.createServer(app);
 
 // ======================================================
-// START HTTP SERVER FIRST
+// REMINDER INITIALIZATION
 // ======================================================
 
-server.listen(
-  port,
-  "0.0.0.0",
+async function initAlarms() {
+  try {
+    console.log("Checking scheduled reminders...");
 
-  () => {
-    console.log("");
+    const tasks = await TodolistSchema.find({
+      alarm: { $ne: null },
+    });
 
-    console.log("======================================");
+    for (const task of tasks) {
+      try {
+        scheduleAlarm(task);
+      } catch (error) {
+        console.error(`Failed to schedule alarm for task ${task._id}:`, error);
+      }
+    }
 
-    console.log("🚀 CHAT SERVER STARTED");
+    console.log(`Reminder initialization complete: ${tasks.length} task(s) checked.`);
+  } catch (error) {
+    console.error("Reminder initialization failed:", error);
+  }
+}
 
-    console.log("======================================");
+// ======================================================
+// TEMPLATE SEEDING
+// ======================================================
 
-    console.log(`PORT: ${port}`);
+async function initSeed() {
+  try {
+    await seed();
+    console.log("Template seeding completed.");
+  } catch (error) {
+    console.error("Template seeding failed:", error);
+  }
+}
 
-    console.log(`LOCAL: http://192.168.1.4:${port}`);
+// ======================================================
+// START SERVER
+// ======================================================
 
-    console.log(`LAN: http://192.168.1.4:${port}`);
+server.listen(port, "0.0.0.0", () => {
+  console.log("======================================");
+  console.log("Todo List Backend Started");
+  console.log(`PORT: ${port}`);
+  console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log("Health check: /health");
+  console.log("======================================");
 
-    // ------------------------------------------
-    // UPLOAD
-    // ------------------------------------------
-
-    console.log(`UPLOAD: http://192.168.1.4:${port}/uploads/`);
-
-    console.log(`UPLOAD TEST: http://192.168.1.4:${port}/api/upload-test`);
-
-    console.log(`MEDIA API: http://192.168.1.4:${port}/api/upload-media`);
-
-    console.log("======================================");
-
-    console.log("");
-  },
-);
+  // Run background initialization without blocking the HTTP listener.
+  void initAlarms();
+  void initSeed();
+});
 
 // ======================================================
 // GRACEFUL SHUTDOWN
 // ======================================================
 
-const shutdown = async (signal) => {
-  console.log("");
-  console.log(`🛑 ${signal} received. Shutting down...`);
+let isShuttingDown = false;
+
+async function shutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  console.log(`${signal} received. Shutting down...`);
+
+  const forceExit = setTimeout(() => {
+    console.error("Shutdown timed out.");
+    process.exit(1);
+  }, 10000);
 
   try {
-    // Stop accepting new HTTP connections
-    server.close(() => {
-      console.log("✅ HTTP server closed");
+    await new Promise((resolve, reject) => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
     });
 
-    // Close MongoDB
-    if (mongoose.connection.readyState === 1) {
+    if (mongoose.connection.readyState !== 0) {
       await mongoose.connection.close();
-
-      console.log("✅ MongoDB connection closed");
     }
 
-    console.log("✅ Server shutdown complete");
-
+    clearTimeout(forceExit);
+    console.log("Server shutdown complete.");
     process.exit(0);
   } catch (error) {
-    console.error("❌ Shutdown error:", error);
-
+    clearTimeout(forceExit);
+    console.error("Shutdown error:", error);
     process.exit(1);
   }
-};
+}
 
-process.on("SIGINT", () => shutdown("SIGINT"));
-
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
