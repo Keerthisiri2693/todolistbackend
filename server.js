@@ -16,7 +16,7 @@ import http from "http";
 import { TodolistSchema } from "./src/models/todolistModels.js";
 import { scheduleAlarm } from "./src/Helper/alarm.js";
 import "./src/config/db.js"; // ensures DB + GridFSBucket initialized
-import { initiateApp } from "./src/helper/apiHelper.js";
+import { initiateApp } from "./src/Helper/apiHelper.js";
 
 import { seed } from "./src/routes/seedTemplates.js";
 
