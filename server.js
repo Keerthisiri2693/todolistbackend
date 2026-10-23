@@ -47,7 +47,7 @@ app.get("/api/userLoginOrLogout1", (req, res) => {
   res.send("Login route works!");
 });
 
-const port = Number(process.env.PORT) || 5001;
+const port = Number(process.env.PORT) || 5003;
 
 // ======================================================
 // CORS
