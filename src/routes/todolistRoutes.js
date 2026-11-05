@@ -536,4 +536,53 @@ router.post("/api/unlockNote/:id", authendicate, async (req, res, next) => {
   }
 });
 
+
+//change pin
+
+router.post("/api/changeLockPin/:id", authendicate, async (req, res) => {
+  try {
+    const { oldPin, newPin, confirmPin } = req.body;
+ const tdlId = req.params.id;
+    const token = req.header("Authorization");
+
+       if (!token) {
+      throw new UnauthorizedError("Token required..");
+    }
+
+    const userId = await getUserIdFromToken(token);
+    if (!userId) throw new NotFoundError("UserID not found..");
+
+    const noteData = await TodolistSchema.findOne({ tdlId: tdlId });
+    if (!noteData) throw new NotFoundError("Todolist not found..");
+    if (!noteData.locked) {
+      throw new BadRequestError("Note is not locked..");
+    }
+
+    const valid = await noteData.verifyPin(oldPin);
+
+    if (!valid) {
+      throw new UnauthorizedError("Invalid Old PIN");
+    }
+   if (newPin !== confirmPin) {
+      throw new BadRequestError(
+        "New Pin and Confirm Pin do not match."
+      );
+    }
+
+    await noteData.setPin(newPin);
+    noteData.locked = true;
+    await noteData.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "New PIN changed successfully",
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
 export default router;
