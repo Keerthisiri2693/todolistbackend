@@ -7,35 +7,36 @@ export const UserLoginCredentials = mongoose.model(
   new Schema(
     {
       userId: {
-      type: String,
-      required: true,
-      unique: true,
-    },
+        type: String,
+        required: true,
+        unique: true,
+      },
       userName: {
-      type: String,
-      required: true,
-    },
+        type: String,
+        required: true,
+      },
       email: {
-      type: String,
-      required: true
-    },
+        type: String,
+        required: true,
+      },
       password: {
-      type: String,
-      required: true
-    },
+        type: String,
+        required: true,
+      },
       profilePicUrl: {
-      type: String
-    },
+        type: String,
+      },
       fcmToken: {
-      type: String
-    },
+        type: String,
+      },
       isLoggedin: {
-      type: String
-    },
+        type: String,
+      },
       Description: {
-      type: String
-    },
-     
+        type: String,
+      },
+      isVerified: { type: Boolean, default: false },
+
       pinedUsers: [
         {
           userName: String,
@@ -55,9 +56,13 @@ export const UserLoginCredentials = mongoose.model(
           userId: String,
         },
       ],
+    
       favoritedUser: Array,
       passwordForArchive: String,
       status: Boolean,
+      mode :   { type: String,
+      enum: ["Android", "Ios", "Desktop","Web"],
+      default: "Android"}
     },
     {
       timestamps: true,
