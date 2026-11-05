@@ -22,6 +22,10 @@ import {
   SuccessResponse,
   sendResponse,
 } from "../../response.js";
+import { generateCode, sendVerificationEmail, saveVerification, verifyCode } 
+  from "../Helper/verificationServices.js";
+  import { Verification } from "../models/verificationModels.js";
+
 const router = express.Router();
 
 cloudinary.config({
@@ -80,7 +84,16 @@ router.post(
       });
       await userStructure
         .save()
-        .then(() => {
+        .then(async() => {
+           // Generate OTP
+    const code = generateCode();
+
+    // Save OTP in DB
+    await saveVerification(email, code);
+
+    // Send OTP via email
+    await sendVerificationEmail(email, code);
+
           sendResponse(
             res,
             new SuccessResponse("User Registered successfully..", {
@@ -97,6 +110,19 @@ router.post(
     }
   },
 );
+
+// ========================================================================
+// User Mail id Verification
+// ========================================================================
+router.post("/api/verifyEmail", async (req, res, next) => {
+  try {
+    const { email, code } = req.body;
+    await verifyCode(email, code); // from verificationService.js
+    sendResponse(res, new SuccessResponse("Email verified successfully"), 200);
+  } catch (error) {
+    next(error);
+  }
+});
 
 // ========================================================================
 // User Login / Logout
@@ -220,7 +246,7 @@ router.post(
       delete updates.file;
       delete updates.userId;
 
-      const updateUserDetails = await UserLoginCredentials.findOneAndUpdate(
+      const updateUserDetails = await UserLoginCredentials.findOneAndReplace(
         { userId: userId },
         { $set: updates },
         { new: true },
@@ -241,6 +267,9 @@ router.post(
   },
 );
 
+// ========================================================================
+// Send FCM Token To Backend
+// ========================================================================
 router.post(
   "/api/sendFcmTokenToBackend",
   authendicate,
@@ -252,7 +281,7 @@ router.post(
       if (!token || !loginToken) {
         throw new UnauthorizedError("Token is missing..");
       }
-      const updateToken = await UserLoginCredentials.findOneAndUpdate(
+      const updateToken = await UserLoginCredentials.findOneAndReplace(
         { userId: userData.userId },
         { $set: { fcmToken: token } },
       );
@@ -272,4 +301,142 @@ router.post(
   },
 );
 
+// ========================================================================
+// Request Password Reset
+// ========================================================================
+router.post("/api/forgotPassword", async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    const user = await UserLoginCredentials.findOne({ email });
+
+    if (!user) {
+      throw new BadRequestError("No account found with this email.");
+    }
+
+
+   const code = generateCode();
+
+    await saveVerification(email, code);
+
+    await sendVerificationEmail(email, code);
+
+    sendResponse(
+      res,
+      new SuccessResponse("OTP sent successfully to your email."),
+      200
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ========================================================================
+// Verify Forgot Password OTP
+// ========================================================================
+router.post("/api/verifyForgotPasswordOtp", async (req, res, next) => {
+  try {
+    const { email, otp } = req.body;
+
+  
+await verifyCode(email,code)
+    sendResponse(
+      res,
+      new SuccessResponse("OTP verified successfully."),
+      200
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ========================================================================
+// Reset Password 
+// ========================================================================
+router.post("/api/resetPassword", async (req, res, next) => {
+  try {
+    const { email, otp, password, confirmPassword } = req.body;
+
+    if (password !== confirmPassword) {
+      throw new BadRequestError(
+        "Password and confirm password do not match."
+      );
+    }
+
+ 
+  await verifyForgotPasswordCode(email, code);
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+     await UserLoginCredentials.updateOne(
+      { email },
+      { $set: { password: hashedPassword } }
+    );
+     await Verification.deleteMany({ email });
+
+    sendResponse(
+      res,
+      new SuccessResponse("Password reset successfully."),
+      200
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/api/resendOtp", async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    const verification = await Verification.findOne({ email });
+
+    if (!verification) {
+      throw new BadRequestError("No OTP request found");
+    }
+
+    // 60 seconds cooldown
+    const now = new Date();
+
+    if (
+      verification.lastSentAt &&
+      now.getTime() - verification.lastSentAt.getTime() < 60000
+    ) {
+      throw new BadRequestError(
+        "Please wait 60 seconds before requesting another OTP"
+      );
+    }
+
+    // Maximum 5 resends
+    if (verification.resendCount >= 5) {
+      throw new BadRequestError(
+        "Maximum OTP resend attempts reached"
+      );
+    }
+
+    const newOtp = generateCode();
+    const hashedOtp = await bcrypt.hash(
+      newOtp,
+      10
+    );
+
+
+    verification.code = hashedOtp;
+    verification.expiresAt = new Date(
+      Date.now() + 10 * 60 * 1000
+    );
+    verification.lastSentAt = now;
+    verification.resendCount += 1;
+
+    await verification.save();
+
+    await sendVerificationEmail(email, newOtp);
+
+    sendResponse(
+      res,
+      new SuccessResponse("OTP resent successfully"),
+      200
+    );
+  } catch (error) {
+    next(error);
+  }
+});
 export default router;
