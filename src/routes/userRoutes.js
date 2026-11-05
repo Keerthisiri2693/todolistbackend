@@ -38,78 +38,79 @@ const upload = multer({ dest: "temp/" });
 // ========================================================================
 // User Register
 // ========================================================================
-router.post(
-  "/api/userRegister",
-  upload.single("profile"),
-  async (req, res, next) => {
-    try {
-      const { userName, email, password, confirmPassword } = req.body;
-      const userId = await generateUniqueUserId();
-      const isUserExcist = await UserLoginCredentials.findOne({
-        email: email,
-      });
-
-      if (isUserExcist)
-        throw new ConflictError("This email already registered..");
-
-      if (password !== confirmPassword)
-        throw new BadRequestError(
-          "Password and confirm password do not match..",
-        );
-      let profilePicUrl = null;
-
-      if (req.file) {
-        const filePath = req.file.path;
-        const mimetype = req.file.mimetype;
-        const originalNameWithExt = path.parse(req.file.originalname);
-        const result = await cloudinary.uploader.upload(filePath, {
-          resource_type: "image",
-          folder: `ProfilePicture/Individual/${userName}-${userId}`,
-          public_id: `${userName}.${userId}_profilePic`,
+  router.post(
+    "/api/userRegister",
+    upload.single("profile"),
+    async (req, res, next) => {
+      try {
+        const { userName, email, password, confirmPassword } = req.body;
+        const userId = await generateUniqueUserId();
+        const isUserExcist = await UserLoginCredentials.findOne({
+          email: email,
         });
-        fs.unlinkSync(filePath);
-        profilePicUrl = result.secure_url;
-      }
+  console.log(userName, email, password, confirmPassword );
 
-      const hashedPassword = await bcrypt.hash(password, 10);
-      const userStructure = new UserLoginCredentials({
-        userId: userId,
-        userName: userName,
-        email: email,
-        password: hashedPassword,
-        fcmToken: null,
-        isLoggedin: false,
-        passwordForArchive: null,
-        profilePicUrl: profilePicUrl,
-      });
-      await userStructure
-        .save()
-        .then(async() => {
-           // Generate OTP
-    const code = generateCode();
+        if (isUserExcist)
+          throw new ConflictError("This email already registered..");
 
-    // Save OTP in DB
-    await saveVerification(email, code);
-
-    // Send OTP via email
-    await sendVerificationEmail(email, code);
-
-          sendResponse(
-            res,
-            new SuccessResponse("User Registered successfully..", {
-              data: userStructure,
-            }),
-            201,
+        if (password !== confirmPassword)
+          throw new BadRequestError(
+            "Password and confirm password do not match..",
           );
-        })
-        .catch((error) => {
-          return res.status(400).json({ success: false, error: error.message });
+        let profilePicUrl = null;
+
+        if (req.file) {
+          const filePath = req.file.path;
+          const mimetype = req.file.mimetype;
+          const originalNameWithExt = path.parse(req.file.originalname);
+          const result = await cloudinary.uploader.upload(filePath, {
+            resource_type: "image",
+            folder: `ProfilePicture/Individual/${userName}-${userId}`,
+            public_id: `${userName}.${userId}_profilePic`,
+          });
+          fs.unlinkSync(filePath);
+          profilePicUrl = result.secure_url;
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const userStructure = new UserLoginCredentials({
+          userId: userId,
+          userName: userName,
+          email: email,
+          password: hashedPassword,
+          fcmToken: null,
+          isLoggedin: false,
+          passwordForArchive: null,
+          profilePicUrl: profilePicUrl,
         });
-    } catch (error) {
-      next(error);
-    }
-  },
-);
+        await userStructure
+          .save()
+          .then(async() => {
+            // Generate OTP
+      // const code = generateCode();
+
+      // // Save OTP in DB
+      // await saveVerification(email, code);
+
+      // // Send OTP via email
+      // await sendVerificationEmail(email, code);
+
+            sendResponse(
+              res,
+              new SuccessResponse("User Registered successfully..", {
+                data: userStructure,
+              }),
+              201,
+            );
+          })
+          .catch((error) => {
+            return res.status(400).json({ success: false, error: error.message });
+          });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
 // ========================================================================
 // User Mail id Verification
@@ -219,6 +220,7 @@ router.post(
       if (!findUserData) {
         throw new NotFoundError("Can't find user details..");
       }
+console.log(req.file);
 
       if (req.file) {
         if (findUserData.profilePicUrl) {
@@ -245,8 +247,9 @@ router.post(
       }
       delete updates.file;
       delete updates.userId;
+console.log(userId);
 
-      const updateUserDetails = await UserLoginCredentials.findOneAndReplace(
+      const updateUserDetails = await UserLoginCredentials.findOneAndUpdate(
         { userId: userId },
         { $set: updates },
         { new: true },
@@ -257,7 +260,7 @@ router.post(
       sendResponse(
         res,
         new SuccessResponse("User details successfully updated..", {
-          data: findUserData,
+          data: updateUserDetails,
         }),
         200,
       );
