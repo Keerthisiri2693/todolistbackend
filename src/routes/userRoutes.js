@@ -201,74 +201,142 @@ router.post("/api/getUser", async (req, res, next) => {
 // ========================================================================
 // Update User
 // ========================================================================
+
+      
+      
+
+
 router.post(
   "/api/updateUserDetails",
   authendicate,
   upload.single("file"),
   async (req, res, next) => {
-    try {
-      const token = req.header("Authorization");
-      if (!token) {
-        throw new UnauthorizedError("Token required..");
-      }
-      const userId = await getUserIdFromToken(token);
-      const updates = req.body;
+    const filePath = req.file?.path;
 
+    try {
+      // 1. Validate authorization token
+      const token = req.header("Authorization");
+
+      if (!token) {
+        throw new UnauthorizedError("Token required.");
+      }
+
+      const userId = await getUserIdFromToken(token);
+
+      // 2. Find existing user
       const findUserData = await UserLoginCredentials.findOne({
         userId: userId,
       });
+
       if (!findUserData) {
-        throw new NotFoundError("Can't find user details..");
+        throw new NotFoundError("Can't find user details.");
       }
-console.log(req.file);
 
+      // 3. Prepare update fields
+      const updates = { ...req.body };
+
+      // Prevent unauthorized field modifications
+      delete updates.file;
+      delete updates.userId;
+      delete updates.profilePicUrl;
+
+      console.log("Updating user:", userId);
+      console.log("Uploaded file:", req.file);
+
+      let newProfilePicUrl = null;
+
+      // 4. Upload new profile image to Cloudinary
       if (req.file) {
-        if (findUserData.profilePicUrl) {
-          const publicId = findUserData.profilePicUrl
-            .split("/")
-            .slice(-1)[0]
-            .split(".")[0];
-          console.log(publicId);
-
-          await cloudinary.uploader.destroy(
-            `ProfilePicture/Individual/${findUserData.userName}-${findUserData.userId}/${publicId}`,
-            { resource_type: "image" },
+        if (!filePath) {
+          throw new BadRequestError(
+            "Uploaded file path is missing. Check Multer disk storage."
           );
         }
 
-        const filePath = req.file.path;
-        const result = await cloudinary.uploader.upload(filePath, {
-          resource_type: "image",
-          folder: `ProfilePicture/Individual/${findUserData.userName}-${findUserData.userId}`,
-          public_id: `${findUserData.userName}-${findUserData.userId}_profilePic`,
-        });
-        fs.unlinkSync(filePath);
-        updates.profilePicUrl = result.secure_url;
-      }
-      delete updates.file;
-      delete updates.userId;
-console.log(userId);
+        const folderPath =
+          `ProfilePicture/Individual/${findUserData.userName}-${findUserData.userId}`;
 
-      const updateUserDetails = await UserLoginCredentials.findOneAndUpdate(
-        { userId: userId },
-        { $set: updates },
-        { new: true },
-      );
-      if (!updateUserDetails) {
-        throw new BadRequestError("Can't update user details..");
+        const publicId =
+          `${findUserData.userName}-${findUserData.userId}_profilePic`;
+
+        const result = await cloudinary.uploader.upload(
+          filePath,
+          {
+            resource_type: "image",
+            folder: folderPath,
+            public_id: publicId,
+            overwrite: true,
+            invalidate: true,
+          }
+        );
+
+        if (!result || !result.secure_url) {
+          throw new Error("Cloudinary image upload failed.");
+        }
+
+        newProfilePicUrl = result.secure_url;
+
+        updates.profilePicUrl = newProfilePicUrl;
+
+        console.log("Cloudinary upload successful:", {
+          publicId: result.public_id,
+          url: result.secure_url,
+        });
       }
+
+      // 5. Update MongoDB user details
+      const updateUserDetails =
+        await UserLoginCredentials.findOneAndUpdate(
+          { userId: userId },
+          { $set: updates },
+          {
+            new: true,
+            runValidators: true,
+          }
+        );
+
+      if (!updateUserDetails) {
+        throw new BadRequestError(
+          "Can't update user details."
+        );
+      }
+
+      // 6. Send success response
       sendResponse(
         res,
-        new SuccessResponse("User details successfully updated..", {
-          data: updateUserDetails,
-        }),
-        200,
+        new SuccessResponse(
+          "User details successfully updated.",
+          {
+            data: updateUserDetails,
+          }
+        ),
+        200
       );
+
     } catch (error) {
+      console.error("UPDATE USER DETAILS ERROR:", error);
+
       next(error);
+
+    } finally {
+      // 7. Remove temporary uploaded file
+      if (filePath) {
+        try {
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            console.log("Temporary file deleted:", filePath);
+          }
+        } catch (cleanupError) {
+          console.error(
+            "Temporary file cleanup error:",
+            cleanupError
+          );
+        }
+      }
     }
-  },
+  }
 );
+
 
 // ========================================================================
 // Send FCM Token To Backend
