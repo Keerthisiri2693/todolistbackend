@@ -144,9 +144,25 @@ router.put(
       if (!task) throw new NotFoundError("Todolist not Found");
       const today = new Date();
       today.setHours(0, 0, 0, 0);
+      console.log(
+        "task details",
+        task.title,
+        task.date,
+        task.text,
+        task.reminderDate,
+        task.reminderTime,
+        task.recurring,
+        task.status,
+        task.noteType,
+        task.pin,
+      );
 
-      let fileIds = [];
-      let type = [];
+      let fileIds = task.fileIds || [];
+      let type = task.type || [];
+      console.log("fileIds",fileIds);
+      console.log(("type",type));
+      
+      
 
       // Handle new files if provided
       if (req.files && req.files.length > 0) {
@@ -193,6 +209,7 @@ router.put(
         updateData,
         { new: true },
       );
+      
       if (!updatedTask) {
         throw new NotFoundError("Todolist not found..");
       }
@@ -370,7 +387,7 @@ router.post("/api/deleteTodos/:id", authendicate, async (req, res, next) => {
       throw new NotFoundError("Can't find user details..");
     }
     const isexist = await TodolistSchema.findOne({ tdlId });
-console.log(isexist);
+    console.log(isexist);
 
     if (!isexist) {
       throw new NotFoundError("Todolist not found..");
@@ -430,8 +447,7 @@ router.post("/api/changePinNote/:id", async (req, res, next) => {
     const { pin } = req.body;
 
     const tdlId = req.params.id;
-if(!tdlId)
-  throw new NotFoundError("Todolist not found..")
+    if (!tdlId) throw new NotFoundError("Todolist not found..");
     // Update everything
     const updateData = {
       $set: { isPin: pin },
@@ -536,16 +552,13 @@ router.post("/api/unlockNote/:id", authendicate, async (req, res, next) => {
   }
 });
 
-
-//change pin
-
 router.post("/api/changeLockPin/:id", authendicate, async (req, res) => {
   try {
     const { oldPin, newPin, confirmPin } = req.body;
- const tdlId = req.params.id;
+    const tdlId = req.params.id;
     const token = req.header("Authorization");
 
-       if (!token) {
+    if (!token) {
       throw new UnauthorizedError("Token required..");
     }
 
@@ -563,10 +576,8 @@ router.post("/api/changeLockPin/:id", authendicate, async (req, res) => {
     if (!valid) {
       throw new UnauthorizedError("Invalid Old PIN");
     }
-   if (newPin !== confirmPin) {
-      throw new BadRequestError(
-        "New Pin and Confirm Pin do not match."
-      );
+    if (newPin !== confirmPin) {
+      throw new BadRequestError("New Pin and Confirm Pin do not match.");
     }
 
     await noteData.setPin(newPin);
@@ -584,5 +595,4 @@ router.post("/api/changeLockPin/:id", authendicate, async (req, res) => {
     });
   }
 });
-
 export default router;
