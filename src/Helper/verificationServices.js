@@ -1,4 +1,3 @@
-
 import crypto from "crypto";
 import nodemailer from "nodemailer";
 import bcrypt from "bcrypt";
@@ -6,14 +5,7 @@ import bcrypt from "bcrypt";
 import { Verification } from "../models/verificationModels.js";
 import { UserLoginCredentials } from "../models/loginModels.js";
 
-// ======================================================
-// GMAIL SMTP CONFIGURATION
-// ======================================================
-
-if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-  console.error("❌ EMAIL_USER or EMAIL_PASS is missing.");
-}
-
+// Gmail SMTP configuration. EMAIL_USER and EMAIL_PASS must be set in Render.
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 465,
@@ -27,33 +19,25 @@ const transporter = nodemailer.createTransport({
   socketTimeout: 20000,
 });
 
-// Verify Gmail SMTP connection
-transporter.verify()
-  .then(() => {
-    console.log("✅ Gmail SMTP connection successful.");
-    console.log("📧 Gmail sender:", process.env.EMAIL_USER);
-  })
-  .catch((error) => {
-    console.error("❌ Gmail SMTP connection failed:", {
-      code: error.code,
-      command: error.command,
-      responseCode: error.responseCode,
-      response: error.response,
-      message: error.message,
+if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+  console.error("[EMAIL] EMAIL_USER or EMAIL_PASS is missing.");
+} else {
+  transporter.verify()
+    .then(() => console.log("[EMAIL] Gmail SMTP connection successful."))
+    .catch((error) => {
+      console.error("[EMAIL] Gmail SMTP connection failed:", {
+        code: error.code,
+        command: error.command,
+        responseCode: error.responseCode,
+        response: error.response,
+        message: error.message,
+      });
     });
-  });
-
-// ======================================================
-// GENERATE SIX-DIGIT OTP
-// ======================================================
+}
 
 export function generateCode() {
   return crypto.randomInt(100000, 1000000).toString();
 }
-
-// ======================================================
-// SEND OTP EMAIL
-// ======================================================
 
 export async function sendVerificationEmail(email, code) {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
@@ -70,56 +54,22 @@ export async function sendVerificationEmail(email, code) {
       },
       to: normalizedEmail,
       subject: "TodoList - Email Verification Code",
-
-      text: `
-Your TodoList verification code is ${code}.
-
-This OTP expires in 10 minutes.
-Do not share this code with anyone.
-      `,
-
+      text: `Your TodoList verification code is ${code}. It expires in 10 minutes. Do not share this code with anyone.`,
       html: `
-        <div style="
-          font-family: Arial, sans-serif;
-          max-width: 500px;
-          margin: auto;
-          padding: 25px;
-          background: #f4f8f5;
-          border-radius: 12px;
-        ">
-          <h2 style="color: #064E3B;">
-            TodoList Email Verification
-          </h2>
-
+        <div style="font-family:Arial,sans-serif;max-width:500px;margin:auto;padding:25px;background:#f4f8f5;border-radius:12px;">
+          <h2 style="color:#064E3B;">TodoList Email Verification</h2>
           <p>Your verification code is:</p>
-
-          <div style="
-            background: #ffffff;
-            padding: 20px;
-            text-align: center;
-            border-radius: 10px;
-          ">
-            <h1 style="
-              color: #16a085;
-              letter-spacing: 8px;
-              font-size: 32px;
-            ">
-              ${code}
-            </h1>
+          <div style="background:#fff;padding:20px;text-align:center;border-radius:10px;">
+            <h1 style="color:#16a085;letter-spacing:8px;font-size:32px;">${code}</h1>
           </div>
-
           <p>This OTP expires in 10 minutes.</p>
-
-          <p style="color: #777;">
-            Please do not share this code with anyone.
-          </p>
-
+          <p>Please do not share this code with anyone.</p>
           <p>Thanks,<br/>TodoList Support</p>
         </div>
       `,
     });
 
-    console.log("✅ OTP email accepted by SMTP server:", {
+    console.log("[EMAIL] SMTP send result:", {
       to: normalizedEmail,
       messageId: result.messageId,
       accepted: result.accepted,
@@ -132,9 +82,8 @@ Do not share this code with anyone.
     }
 
     return true;
-
   } catch (error) {
-    console.error("❌ OTP EMAIL SENDING FAILED:", {
+    console.error("[EMAIL] OTP sending failed:", {
       code: error.code,
       command: error.command,
       responseCode: error.responseCode,
@@ -142,16 +91,9 @@ Do not share this code with anyone.
       message: error.message,
       recipient: normalizedEmail,
     });
-
-    // Preserve the original error for debugging.
     throw error;
   }
 }
-
-// ======================================================
-// SAVE HASHED OTP
-// purpose: registration OR forgotPassword
-// ======================================================
 
 export async function saveVerification(email, code, purpose) {
   const normalizedEmail = email.trim().toLowerCase();
@@ -160,13 +102,9 @@ export async function saveVerification(email, code, purpose) {
     throw new Error("Invalid OTP purpose.");
   }
 
-  const hashedOtp = await bcrypt.hash(code.toString(), 10);
+  const hashedOtp = await bcrypt.hash(String(code), 10);
 
-  await Verification.deleteMany({
-    email: normalizedEmail,
-    purpose,
-  });
-
+  await Verification.deleteMany({ email: normalizedEmail, purpose });
   await Verification.create({
     email: normalizedEmail,
     code: hashedOtp,
@@ -178,126 +116,60 @@ export async function saveVerification(email, code, purpose) {
     attempts: 0,
   });
 
-  console.log("✅ OTP record saved:", {
-    email: normalizedEmail,
-    purpose,
-  });
-
+  console.log("[OTP] Verification record saved:", { email: normalizedEmail, purpose });
   return true;
 }
 
-// ======================================================
-// COMMON OTP VALIDATION
-// ======================================================
-
 async function validateOtp(email, code, purpose) {
   const normalizedEmail = email.trim().toLowerCase();
+  const record = await Verification.findOne({ email: normalizedEmail, purpose });
 
-  const record = await Verification.findOne({
-    email: normalizedEmail,
-    purpose,
-  });
+  if (!record) throw new Error("Invalid or expired OTP. Please request a new one.");
 
-  if (!record) {
-    throw new Error("Invalid or expired OTP.");
-  }
-
-  if (record.expiresAt.getTime() <= Date.now()) {
+  if (new Date(record.expiresAt).getTime() <= Date.now()) {
     await Verification.deleteOne({ _id: record._id });
     throw new Error("OTP has expired. Please request a new OTP.");
   }
 
-  if (record.attempts >= 5) {
+  if ((record.attempts || 0) >= 5) {
     await Verification.deleteOne({ _id: record._id });
-    throw new Error("Maximum OTP verification attempts reached.");
+    throw new Error("Maximum OTP verification attempts reached. Request a new OTP.");
   }
 
-  const isValid = await bcrypt.compare(
-    code.toString(),
-    record.code
-  );
-
+  const isValid = await bcrypt.compare(String(code), record.code);
   if (!isValid) {
-    record.attempts += 1;
-
+    record.attempts = (record.attempts || 0) + 1;
     if (record.attempts >= 5) {
       await Verification.deleteOne({ _id: record._id });
-      throw new Error("Maximum OTP verification attempts reached.");
+      throw new Error("Maximum OTP verification attempts reached. Request a new OTP.");
     }
-
     await record.save();
-
     throw new Error("Invalid OTP.");
   }
 
   return record;
 }
 
-// ======================================================
-// VERIFY REGISTRATION EMAIL
-// ======================================================
-
-export async function verifyCode(
-  email,
-  code,
-  purpose = "registration"
-) {
-  if (purpose !== "registration") {
-    throw new Error("Invalid registration verification purpose.");
-  }
+export async function verifyCode(email, code, purpose = "registration") {
+  if (purpose !== "registration") throw new Error("Invalid registration verification purpose.");
 
   const normalizedEmail = email.trim().toLowerCase();
-
-  const record = await validateOtp(
-    normalizedEmail,
-    code,
-    purpose
-  );
-
+  const record = await validateOtp(normalizedEmail, code, purpose);
   const result = await UserLoginCredentials.updateOne(
-    {
-      email: normalizedEmail,
-      isVerified: false,
-    },
-    {
-      $set: {
-        isVerified: true,
-      },
-    }
+    { email: normalizedEmail, isVerified: false },
+    { $set: { isVerified: true } }
   );
 
   if (result.matchedCount === 0) {
-    const user = await UserLoginCredentials.findOne({
-      email: normalizedEmail,
-    });
-
-    if (!user) {
-      throw new Error("User not found.");
-    }
-
-    if (user.isVerified) {
-      throw new Error("Email is already verified.");
-    }
+    const user = await UserLoginCredentials.findOne({ email: normalizedEmail });
+    if (!user) throw new Error("User not found.");
+    if (user.isVerified) throw new Error("Email is already verified.");
   }
 
-  await Verification.deleteOne({
-    _id: record._id,
-  });
-
+  await Verification.deleteOne({ _id: record._id });
   return true;
 }
 
-// ======================================================
-// VERIFY FORGOT PASSWORD OTP
-// ======================================================
-
 export async function verifyForgotPasswordCode(email, code) {
-  const record = await validateOtp(
-    email,
-    code,
-    "forgotPassword"
-  );
-
-  // Keep the record until password reset succeeds.
-  return record;
+  return validateOtp(email, code, "forgotPassword");
 }

@@ -116,8 +116,16 @@ router.post(
       });
 
       if (existingUser) {
-        throw new ConflictError("This email is already registered.");
+        if (!existingUser.isVerified) {
+          console.warn("[REGISTER] Existing unverified account; use resend OTP");
+          throw new ConflictError(
+            "Account already exists but email is not verified. Please use Resend OTP."
+          );
+        }
+        throw new ConflictError("This email is already registered. Please log in.");
       }
+
+      console.log("[REGISTER] Validation passed; creating user");
 
       const userId = await generateUniqueUserId();
 
@@ -148,29 +156,28 @@ router.post(
       });
 
       await userStructure.save();
+      console.log("[REGISTER] User saved");
 
       // Generate registration OTP
       const code = generateCode();
 
       // Save hashed OTP
-      await saveVerification(
-        normalizedEmail,
-        code,
-        "registration"
-      );
+      await saveVerification(normalizedEmail, code, "registration");
+      console.log("[REGISTER] OTP saved; attempting email delivery");
 
-      // Send OTP using Gmail
       try {
         await sendVerificationEmail(normalizedEmail, code);
+        console.log("[REGISTER] OTP accepted by mail server");
       } catch (emailError) {
-        await Verification.deleteMany({
-          email: normalizedEmail,
-          purpose: "registration",
+        // Preserve the OTP record and unverified account for recovery.
+        console.error("[REGISTER] OTP email failed:", {
+          code: emailError.code,
+          command: emailError.command,
+          responseCode: emailError.responseCode,
+          message: emailError.message,
         });
-
-        // Keep the unverified account so the user can request a resend.
         throw new InternalServerError(
-          "Account created, but verification email could not be sent. Please try resending the OTP."
+          "Account created, but email delivery failed. Wait 60 seconds, then use Resend OTP."
         );
       }
 
@@ -378,17 +385,13 @@ router.post(
         throw new NotFoundError("Can't find user details.");
       }
 
-      const updates = { ...req.body };
-
-      // Prevent sensitive field modification
-      delete updates.file;
-      delete updates.userId;
-      delete updates.email;
-      delete updates.password;
-      delete updates.isVerified;
-      delete updates.isLoggedin;
-      delete updates.fcmToken;
-      delete updates.profilePicUrl;
+      // Allow only explicitly editable profile fields.
+      const updates = {};
+      for (const field of ["userName", "Description"]) {
+        if (typeof req.body[field] === "string") {
+          updates[field] = req.body[field].trim();
+        }
+      }
 
       if (req.file) {
         const result = await cloudinary.uploader.upload(filePath, {
@@ -632,59 +635,92 @@ router.post("/api/resetPassword", async (req, res, next) => {
 
 router.post("/api/resendOtp", async (req, res, next) => {
   try {
-    const { email } = req.body;
+    const { email, purpose = "registration" } = req.body;
 
-    if (!email) {
+    if (typeof email !== "string" || !email.trim()) {
       throw new BadRequestError("Email is required.");
+    }
+    if (!["registration", "forgotPassword"].includes(purpose)) {
+      throw new BadRequestError("Invalid OTP purpose.");
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-
-    const verification = await Verification.findOne({
-      email: normalizedEmail,
-    });
-
-    if (!verification) {
-      throw new BadRequestError("No OTP request found.");
+    const user = await UserLoginCredentials.findOne({ email: normalizedEmail });
+    if (!user) {
+      throw new NotFoundError("No account found with this email.");
+    }
+    if (purpose === "registration" && user.isVerified) {
+      throw new ConflictError("Email is already verified. Please log in.");
     }
 
     const now = new Date();
+    let verification = await Verification.findOne({
+      email: normalizedEmail,
+      purpose,
+    });
 
-    // 60-second cooldown
-    if (
-      verification.lastSentAt &&
-      now.getTime() - verification.lastSentAt.getTime() < 60000
-    ) {
-      throw new BadRequestError(
-        "Please wait 60 seconds before requesting another OTP."
-      );
-    }
+    if (verification) {
+      if (verification.resendBlockedUntil &&
+          verification.resendBlockedUntil.getTime() > now.getTime()) {
+        throw new BadRequestError("OTP resend is temporarily blocked. Try later.");
+      }
 
-    // Maximum 5 resends
-    if (verification.resendCount >= 5) {
-      throw new BadRequestError(
-        "Maximum OTP resend attempts reached."
-      );
+      if (verification.resendBlockedUntil &&
+          verification.resendBlockedUntil.getTime() <= now.getTime()) {
+        verification.resendCount = 0;
+        verification.resendBlockedUntil = null;
+      }
+
+      if (verification.lastSentAt &&
+          now.getTime() - new Date(verification.lastSentAt).getTime() < 60000) {
+        throw new BadRequestError(
+          "Please wait 60 seconds before requesting another OTP."
+        );
+      }
+
+      if (verification.resendCount >= 5) {
+        verification.resendBlockedUntil = new Date(now.getTime() + 15 * 60 * 1000);
+        await verification.save();
+        throw new BadRequestError(
+          "Maximum OTP resends reached. Try again after 15 minutes."
+        );
+      }
     }
 
     const newOtp = generateCode();
+    console.log("[RESEND OTP] Attempting email delivery", { purpose });
 
-    // Send first; update the stored OTP only after email succeeds
-    await sendVerificationEmail(normalizedEmail, newOtp);
+    // Send first so a failed SMTP request does not invalidate an old OTP.
+    try {
+      await sendVerificationEmail(normalizedEmail, newOtp);
+    } catch (emailError) {
+      console.error("[RESEND OTP] SMTP failed:", {
+        code: emailError.code,
+        command: emailError.command,
+        responseCode: emailError.responseCode,
+        message: emailError.message,
+      });
+      throw new InternalServerError("Could not send OTP email. Please try again later.");
+    }
 
-    verification.code = await bcrypt.hash(newOtp, 10);
-    verification.expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    verification.lastSentAt = now;
-    verification.resendCount += 1;
+    if (!verification) {
+      // Registration may have saved the user but failed before saving an OTP.
+      await saveVerification(normalizedEmail, newOtp, purpose);
+    } else {
+      verification.code = await bcrypt.hash(newOtp, 10);
+      verification.expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      verification.lastSentAt = new Date();
+      verification.resendCount += 1;
+      verification.attempts = 0;
+      await verification.save();
+    }
 
-    await verification.save();
-
-    sendResponse(
+    console.log("[RESEND OTP] OTP accepted by mail server", { purpose });
+    return sendResponse(
       res,
       new SuccessResponse("OTP resent successfully."),
       200
     );
-
   } catch (error) {
     next(error);
   }
