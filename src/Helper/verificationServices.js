@@ -3,6 +3,7 @@ import nodemailer from "nodemailer";
 import { Verification } from "../models/verificationModels.js";
 import { UserLoginCredentials } from "../models/loginModels.js";
 import bcrypt from 'bcrypt';
+import { BadRequestError } from "../../response.js";
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -31,11 +32,11 @@ export async function sendVerificationEmail(email, code) {
 }
 
 // Save code in DB
-export async function saveVerification(email, code, userData,purpose) {
+export async function saveVerification(email, code, userData, purpose) {
   const hashedOtp = await bcrypt.hash(code, 10);
- 
+
   await Verification.findOneAndUpdate(
-    { email, purpose},
+    { email, purpose },
     {
       $set: {
         code: hashedOtp,
@@ -47,7 +48,7 @@ export async function saveVerification(email, code, userData,purpose) {
     },
     {
       upsert: true,
-      new: true,
+      returnDocument: "after",
       setDefaultsOnInsert: true,
     }
   );
