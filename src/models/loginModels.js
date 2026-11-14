@@ -17,7 +17,10 @@ export const UserLoginCredentials = mongoose.model(
       },
       email: {
         type: String,
-        required: true,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
       },
       password: {
         type: String,

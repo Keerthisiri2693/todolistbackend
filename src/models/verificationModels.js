@@ -1,60 +1,48 @@
-
 import mongoose from "mongoose";
 
-const verificationSchema = new mongoose.Schema(
-  {
-    email: {
-      type: String,
-      required: true,
-      lowercase: true,
-      trim: true,
-      index: true,
-    },
-
-    code: {
-      type: String,
-      required: true,
-    },
-
-    // OTP purpose
-    purpose: {
-      type: String,
-      enum: ["registration", "forgotPassword"],
-      required: true,
-    },
-
-    // OTP expiry
-    expiresAt: {
-      type: Date,
-      required: true,
-    },
-
-    // Resend tracking
-    resendCount: {
-      type: Number,
-      default: 0,
-    },
-
-    resendBlockedUntil: {
-      type: Date,
-      default: null,
-    },
-
-    lastSentAt: {
-      type: Date,
-      default: Date.now,
-    },
-
-    // Invalid OTP attempts
-    attempts: {
-      type: Number,
-      default: 0,
-    },
+const verificationSchema = new mongoose.Schema({
+  email: { type: String,
+    required: true,
+    lowercase: true,
+    trim: true, },
+  code: { type: String, required: true },
+  // Registration or forgot password
+  purpose: {
+    type: String,
+    enum: ["registration", "forgotPassword"],
+    default: "registration",
   },
-  {
-    timestamps: true,
-  }
-);
+    // Temporary registration details
+  userData: {
+    userId: String,
+    userName: String,
+    password: String,
+    profilePicUrl: String,
+  },
+
+  expiresAt: { type: Date, required: true },
+    resendCount: {
+    type: Number,
+    default: 0,
+  },
+  resendCount: {
+    type: Number,
+    default: 0,
+  },
+  resendBlockedUntil: {
+    type: Date,
+    default: null,
+  },
+
+  lastSentAt: {
+    type: Date,
+    default: Date.now,
+  },
+    attempts: {
+    type: Number,
+    default: 0,
+  },
+});
 
 // One OTP per email and purpose
 verificationSchema.index(
@@ -62,9 +50,4 @@ verificationSchema.index(
   { unique: true }
 );
 
-// Use your existing MongoDB collection name
-export const Verification = mongoose.model(
-  "Verification",
-  verificationSchema,
-  "Verification"
-);
+export const Verification = mongoose.model("Verification", verificationSchema,"Verification");
