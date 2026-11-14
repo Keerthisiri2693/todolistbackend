@@ -126,8 +126,24 @@ export async function generateUniqueUserId() {
 
 
 
-export const isValidEmail = (email) => {
+// ============================================================
+// NORMALIZE EMAIL
+// ============================================================
+
+export const normalizeEmail = (email) => {
   if (typeof email !== "string") {
+    return "";
+  }
+
+  return email.trim().toLowerCase();
+};
+
+// ============================================================
+// VALIDATE EMAIL
+// ============================================================
+
+export const isValidEmail = (email) => {
+  if (typeof email !== "string" || !email.trim()) {
     return false;
   }
 
