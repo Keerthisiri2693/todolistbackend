@@ -11,7 +11,6 @@ export const OTP_PURPOSE = {
   FORGOT_PASSWORD: "forgotPassword",
 };
 
-// Resend client
 const getResend = () => {
   if (!process.env.RESEND_API_KEY) {
     throw new Error("RESEND_API_KEY is not configured.");
@@ -20,45 +19,52 @@ const getResend = () => {
   return new Resend(process.env.RESEND_API_KEY);
 };
 
-// Generate 6-digit OTP
 export function generateCode() {
   return crypto.randomInt(100000, 1000000).toString();
 }
 
 // Send OTP email
 export async function sendVerificationEmail(email, code) {
-  const resend = getResend();
+  console.log("OTP EMAIL STEP 1: Initializing Resend");
 
+  const resend = getResend();
   const fromEmail = process.env.RESEND_FROM_EMAIL;
 
   if (!fromEmail) {
     throw new Error("RESEND_FROM_EMAIL is not configured.");
   }
 
-  const { data, error } = await resend.emails.send({
-    from: fromEmail,
-    to: email,
-    subject: "TodoList - Email Verification",
-    html: `
-      <div style="font-family:Arial;padding:25px;">
-        <h2>Verify your TodoList account</h2>
-        <p>Your verification code is:</p>
-        <h1 style="letter-spacing:8px;">${code}</h1>
-        <p>This OTP expires in 10 minutes.</p>
-        <p>If you did not request this code, ignore this email.</p>
-      </div>
-    `,
-    text: `Your verification code is ${code}. It expires in 10 minutes.`,
-  });
+  console.log("OTP EMAIL STEP 2: Sending email");
 
-  if (error) {
-    console.error("RESEND ERROR:", error);
-    throw new Error(error.message || "Email sending failed.");
+  try {
+    const { data, error } = await resend.emails.send({
+      from: fromEmail,
+      to: email,
+      subject: "TodoList - Email Verification",
+      html: `
+        <div style="font-family:Arial;padding:25px;">
+          <h2>Verify your TodoList account</h2>
+          <p>Your verification code is:</p>
+          <h1 style="letter-spacing:8px;">${code}</h1>
+          <p>This OTP expires in 10 minutes.</p>
+          <p>If you did not request this code, ignore this email.</p>
+        </div>
+      `,
+      text: `Your verification code is ${code}. It expires in 10 minutes.`,
+    });
+
+    if (error) {
+      console.error("RESEND ERROR:", error);
+      throw new Error(error.message || "Email sending failed.");
+    }
+
+    console.log("OTP EMAIL STEP 3: Email sent", data?.id);
+
+    return data;
+  } catch (error) {
+    console.error("RESEND REQUEST FAILED:", error.message);
+    throw error;
   }
-
-  console.log("OTP email sent successfully:", data?.id);
-
-  return data;
 }
 
 // Save hashed OTP
@@ -70,9 +76,13 @@ export async function saveVerification(
 ) {
   const normalizedEmail = email.trim().toLowerCase();
 
+  console.log("OTP DATABASE STEP 1: Hashing OTP");
+
   const hashedOtp = await bcrypt.hash(code, 10);
 
-  await Verification.findOneAndUpdate(
+  console.log("OTP DATABASE STEP 2: Saving verification record");
+
+  const result = await Verification.findOneAndUpdate(
     {
       email: normalizedEmail,
       purpose,
@@ -90,12 +100,18 @@ export async function saveVerification(
     },
     {
       upsert: true,
-      new: true,
+      returnDocument: "after",
       setDefaultsOnInsert: true,
     }
   );
 
-  console.log("OTP saved successfully:", purpose);
+  if (!result) {
+    throw new Error("Failed to save OTP verification record.");
+  }
+
+  console.log("OTP DATABASE STEP 3: OTP saved successfully");
+
+  return result;
 }
 
 // Verify OTP
@@ -119,7 +135,6 @@ export async function verifyCode(email, code, purpose) {
     throw new Error("OTP expired.");
   }
 
-  // Limit invalid OTP attempts
   if ((record.attempts || 0) >= 5) {
     throw new Error("Maximum OTP attempts reached.");
   }
@@ -136,7 +151,6 @@ export async function verifyCode(email, code, purpose) {
     throw new Error("Invalid OTP.");
   }
 
-  // Registration verification
   if (purpose === OTP_PURPOSE.REGISTRATION) {
     if (!record.userData) {
       throw new Error("Registration data not found.");
@@ -162,8 +176,6 @@ export async function verifyCode(email, code, purpose) {
     });
 
     const userResponse = user.toObject();
-
-    // Never expose password hash
     delete userResponse.password;
 
     await Verification.deleteOne({
@@ -178,7 +190,6 @@ export async function verifyCode(email, code, purpose) {
     };
   }
 
-  // Forgot password verification
   if (purpose === OTP_PURPOSE.FORGOT_PASSWORD) {
     record.verified = true;
     await record.save();

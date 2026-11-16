@@ -1,46 +1,84 @@
+
 import jwt from "jsonwebtoken";
 import { UserLoginCredentials } from "../models/loginModels.js";
-import { ForbiddenError, UnauthorizedError } from "../../response.js";
+import {
+  ForbiddenError,
+  UnauthorizedError,
+} from "../../response.js";
 
 export const authendicate = async (req, res, next) => {
   try {
     const authHeader = req.header("Authorization");
 
-    if (!authHeader) throw new UnauthorizedError("Access-Denied..");
+    if (!authHeader) {
+      throw new UnauthorizedError("Access denied. Token required.");
+    }
 
-    // Remove Bearer
+    // Remove Bearer prefix
     const token = authHeader.startsWith("Bearer ")
       ? authHeader.substring(7).trim()
       : authHeader.trim();
 
-    if (!token) throw new UnauthorizedError("Token missing");
+    if (!token) {
+      throw new UnauthorizedError("Token missing.");
+    }
 
-    // Verify token
-    const verified = jwt.verify(token, process.env.SECRET_KEY_FOR_TOKEN);
+    if (!process.env.SECRET_KEY_FOR_TOKEN) {
+      throw new Error("SECRET_KEY_FOR_TOKEN is not configured.");
+    }
 
-    console.log("✅ JWT VERIFIED:", verified);
+    // Verify JWT
+    let verified;
 
-    if (!verified.userId) throw new ForbiddenError("Invalid User...");
+    try {
+      verified = jwt.verify(
+        token,
+        process.env.SECRET_KEY_FOR_TOKEN
+      );
+    } catch (jwtError) {
+      if (jwtError.name === "TokenExpiredError") {
+        return next(new UnauthorizedError("Session expired. Please login again."));
+      }
 
-    // Check user in database
-    const isUserExist = await UserLoginCredentials.findOne({
+      if (
+        jwtError.name === "JsonWebTokenError" ||
+        jwtError.name === "NotBeforeError"
+      ) {
+        return next(new ForbiddenError("Invalid authentication token."));
+      }
+
+      return next(jwtError);
+    }
+
+    if (!verified || !verified.userId) {
+      throw new ForbiddenError("Invalid user token.");
+    }
+
+    console.log("JWT VERIFIED:", {
       userId: verified.userId,
     });
 
-    if (!isUserExist) throw new ForbiddenError("Invalid User...");
+    // Check user in database
+    const existingUser = await UserLoginCredentials.findOne({
+      userId: verified.userId,
+    });
 
-    // Save userId for later APIs
+    if (!existingUser) {
+      throw new ForbiddenError("User account not found.");
+    }
+
+    // Attach authenticated user information
     req.userId = verified.userId;
+    req.user = existingUser;
 
-    next();
+    return next();
+
   } catch (error) {
-    // console.error("❌ AUTH ERROR:", error);
+    console.error("AUTHENTICATION ERROR:", {
+      message: error.message,
+      name: error.name,
+    });
 
-    if (error.name === "TokenExpiredError" || error.name === "jwt expired")
-      throw new UnauthorizedError("Session Expired");
-
-    if (error.name === "JsonWebTokenError")
-      throw new ForbiddenError("Invalid User...");
-    next(error);
+    return next(error);
   }
 };
