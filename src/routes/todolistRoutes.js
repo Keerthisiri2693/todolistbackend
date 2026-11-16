@@ -4,7 +4,7 @@ import multer from "multer";
 import { TodolistSchema } from "../models/todolistModels.js";
 import { authendicate } from "../middleware/middleware.js";
 import { getUserIdFromToken } from "../Helper/helper.js";
-import { gridfsbucket } from "../config/db.js";
+import { getGridFSBucket } from "../config/db.js";
 import mongoose from "mongoose";
 import {
   addReminder,
@@ -68,12 +68,12 @@ router.post(
       // Handle multiple files
       if (req.files && req.files.length > 0) {
         for (const file of req.files) {
-          const uploadStream = gridfsbucket.openUploadStream(
-            file.originalname,
-            {
-              contentType: file.mimetype,
-            },
-          );
+          const uploadStream = getGridFSBucket().openUploadStream(
+  fileName,
+  {
+    contentType: mimeType,
+  }
+);
           uploadStream.end(file.buffer);
           fileIds.push(uploadStream.id);
           type.push(file.mimetype.split("/")[0]);
@@ -354,7 +354,10 @@ router.get("/api/media/:id", async (req, res, next) => {
     // DOWNLOAD
     // ------------------------------------------------------
 
-    const downloadStream = gridfsbucket.openDownloadStream(objectId);
+    //const downloadStream = getGridFSBucket.openDownloadStream(objectId);
+    const downloadStream = getGridFSBucket().openDownloadStream(
+  new mongoose.Types.ObjectId(fileId)
+);
 
     downloadStream.on("error", (error) => {
       console.error("❌ GRIDFS DOWNLOAD ERROR:", error);
