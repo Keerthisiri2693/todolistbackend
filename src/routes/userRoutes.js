@@ -2,8 +2,8 @@ import express from "express";
 import bcrypt from "bcrypt";
 import { v2 as cloudinary } from "cloudinary";
 import multer from "multer";
-import path from "path";
 import fs from "fs";
+import { promisify } from "util";
 import { UserLoginCredentials } from "../models/loginModels.js";
 import {
   generateToken,
@@ -35,6 +35,7 @@ import { Verification } from "../models/verificationModels.js";
 import { TodolistSchema } from "../models/todolistModels.js";
 
 const router = express.Router();
+const unlinkAsync = promisify(fs.unlink);
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -50,66 +51,105 @@ router.post(
   "/api/userRegister",
   upload.single("profile"),
   async (req, res, next) => {
+    let tempFilePath;
+
     try {
       const { userName, email, password, confirmPassword } = req.body;
+
+      if (!userName?.trim() || !email || !password || !confirmPassword) {
+        throw new BadRequestError("All registration fields are required.");
+      }
 
       const normalizedEmail = normalizeEmail(email);
 
       if (!isValidEmail(normalizedEmail)) {
-        throw new BadRequestError("Invalid email address");
+        throw new BadRequestError("Invalid email address.");
       }
-      const userId = await generateUniqueUserId();
-      const isUserExcist = await UserLoginCredentials.findOne({
+
+      if (password !== confirmPassword) {
+        throw new BadRequestError("Password and confirm password do not match.");
+      }
+
+      if (String(password).length < 8) {
+        throw new BadRequestError("Password must contain at least 8 characters.");
+      }
+
+      const existingUser = await UserLoginCredentials.findOne({
         email: normalizedEmail,
       });
-      if (isUserExcist)
-        throw new ConflictError("This email already registered..");
 
-      if (password !== confirmPassword)
-        throw new BadRequestError(
-          "Password and confirm password do not match..",
+      if (existingUser) {
+        throw new ConflictError("This email is already registered.");
+      }
+
+      const existingVerification = await Verification.findOne({
+        email: normalizedEmail,
+        purpose: OTP_PURPOSE.REGISTRATION,
+      });
+
+      if (existingVerification) {
+        throw new ConflictError(
+          "Registration OTP already sent. Please verify it or request a new OTP."
         );
+      }
+
+      const userId = await generateUniqueUserId();
       let profilePicUrl = null;
 
       if (req.file) {
-        const filePath = req.file.path;
-        const result = await cloudinary.uploader.upload(filePath, {
+        tempFilePath = req.file.path;
+
+        const result = await cloudinary.uploader.upload(tempFilePath, {
           resource_type: "image",
-          folder: `ProfilePicture/Individual/${userName}-${userId}`,
-          public_id: `${userName}.${userId}_profilePic`,
+          folder: `ProfilePicture/Individual/${userName.trim()}-${userId}`,
+          public_id: `${userName.trim()}.${userId}_profilePic`,
         });
-        fs.unlinkSync(filePath);
+
         profilePicUrl = result.secure_url;
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
+
       const userData = {
         userId,
-        userName,
+        userName: userName.trim(),
         password: hashedPassword,
         profilePicUrl,
       };
 
-      // Generate OTP
       const code = generateCode();
 
-      // Save OTP in DB
-      await saveVerification(normalizedEmail, code, userData,OTP_PURPOSE.REGISTRATION);
+      // Store the OTP and pending user data, then send the email.
+      await saveVerification(
+        normalizedEmail,
+        code,
+        userData,
+        OTP_PURPOSE.REGISTRATION
+      );
 
-      // Send OTP via email
       await sendVerificationEmail(normalizedEmail, code);
 
-      sendResponse(
+      return sendResponse(
         res,
         new SuccessResponse(
-          "OTP sent successfully. Verify email to complete registration.",
+          "OTP sent successfully. Verify your email to complete registration."
         ),
-        201,
+        201
       );
     } catch (error) {
-      next(error);
+      return next(error);
+    } finally {
+      if (tempFilePath) {
+        try {
+          await unlinkAsync(tempFilePath);
+        } catch (cleanupError) {
+          if (cleanupError.code !== "ENOENT") {
+            console.error("Temporary profile image cleanup failed:", cleanupError);
+          }
+        }
+      }
     }
-  },
+  }
 );
 
 // ========================================================================
@@ -131,7 +171,7 @@ router.post("/api/verifyEmail", async (req, res, next) => {
       201,
     );
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 
@@ -141,7 +181,7 @@ router.post("/api/verifyEmail", async (req, res, next) => {
 router.post("/api/userLoginOrLogout", async (req, res, next) => {
   try {
     const { type, email, password } = req.body;
-    console.log(type, email, password);
+    console.log("AUTH REQUEST:", { type, email });
     const normalizedEmail = normalizeEmail(email);
 
     if (!isValidEmail(normalizedEmail)) {
@@ -188,7 +228,7 @@ router.post("/api/userLoginOrLogout", async (req, res, next) => {
       );
     }
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 
@@ -210,7 +250,7 @@ router.post("/api/getUser", async (req, res, next) => {
       200,
     );
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 
@@ -277,7 +317,7 @@ router.post("/api/updateUserDetails",
         200,
       );
     } catch (error) {
-      next(error);
+      return next(error);
     }
   },
 );
@@ -285,34 +325,41 @@ router.post("/api/updateUserDetails",
 // ========================================================================
 // Send FCM Token To Backend
 // ========================================================================
-router.post( "/api/sendFcmTokenToBackend",
+router.post(
+  "/api/sendFcmTokenToBackend",
   authendicate,
   async (req, res, next) => {
     try {
       const { token } = req.body;
       const loginToken = req.header("Authorization");
-      const userData = await getUserDataFromToken(loginToken);
+
       if (!token || !loginToken) {
-        throw new UnauthorizedError("Token is missing..");
+        throw new UnauthorizedError("Token is missing.");
       }
-      const updateToken = await UserLoginCredentials.findOneAndUpdate(
+
+      const userData = await getUserDataFromToken(loginToken);
+
+      const updatedUser = await UserLoginCredentials.findOneAndUpdate(
         { userId: userData.userId },
         { $set: { fcmToken: token } },
+        { returnDocument: "after" }
       );
-      if (updateToken) {
-        sendResponse(
-          res,
-          new SuccessResponse("Token stored successfully..", {
-            data: updateToken,
-          }),
-          200,
-        );
+
+      if (!updatedUser) {
+        throw new InternalServerError("Error occurred while storing FCM token.");
       }
-      throw new InternalServerError("Error occurred while storing token..");
+
+      return sendResponse(
+        res,
+        new SuccessResponse("Token stored successfully.", {
+          data: updatedUser,
+        }),
+        200
+      );
     } catch (error) {
-      next(error);
+      return next(error);
     }
-  },
+  }
 );
 
 // ========================================================================
@@ -344,7 +391,7 @@ router.post("/api/forgotPassword", async (req, res, next) => {
       200,
     );
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 
@@ -357,22 +404,55 @@ router.post("/api/resetPassword", async (req, res, next) => {
     const normalizedEmail = normalizeEmail(email);
 
     if (!isValidEmail(normalizedEmail)) {
-      throw new BadRequestError("Invalid email address");
+      throw new BadRequestError("Invalid email address.");
     }
-    if (password !== confirmPassword) {
+
+    if (!password || !confirmPassword || password !== confirmPassword) {
       throw new BadRequestError("Password and confirm password do not match.");
     }
+
+    if (String(password).length < 8) {
+      throw new BadRequestError("Password must contain at least 8 characters.");
+    }
+
+    const verifiedOtp = await Verification.findOne({
+      email: normalizedEmail,
+      purpose: OTP_PURPOSE.FORGOT_PASSWORD,
+      verified: true,
+      expiresAt: { $gt: new Date() },
+    });
+
+    if (!verifiedOtp) {
+      throw new UnauthorizedError(
+        "Please verify the password reset OTP before changing your password."
+      );
+    }
+
+    const user = await UserLoginCredentials.findOne({
+      email: normalizedEmail,
+    });
+
+    if (!user) {
+      throw new NotFoundError("No account found with this email.");
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    await UserLoginCredentials.updateOne(
-      {email :  normalizedEmail },
-      { $set: { password: hashedPassword } },
-    );
-    await Verification.deleteMany({ email : normalizedEmail });
+    user.password = hashedPassword;
+    await user.save();
 
-    sendResponse(res, new SuccessResponse("Password reset successfully."), 200);
+    await Verification.deleteMany({
+      email: normalizedEmail,
+      purpose: OTP_PURPOSE.FORGOT_PASSWORD,
+    });
+
+    return sendResponse(
+      res,
+      new SuccessResponse("Password reset successfully."),
+      200
+    );
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 
@@ -419,28 +499,26 @@ router.post("/api/resendOtp", async (req, res, next) => {
 
     await sendVerificationEmail(normalizedEmail, newOtp);
 
-    sendResponse(res, new SuccessResponse("OTP resent successfully"), 200);
+    return sendResponse(res, new SuccessResponse("OTP resent successfully"), 200);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 
 // =========================================================================
 // Delete User Account
 // =========================================================================
-router.delete("/api/deleteAccount", authendicate, async (req, res) => {
+router.delete("/api/deleteAccount", authendicate, async (req, res, next) => {
   try {
     const token = req.header("Authorization");
     const userId = await getUserIdFromToken(token);
 
-    // Delete all user todos
     await TodolistSchema.deleteMany({ userId });
 
-    // Delete user account
     const deletedUser = await UserLoginCredentials.findOneAndDelete({ userId });
 
     if (!deletedUser) {
-      throw new NotFoundError("Can't find user details..");
+      throw new NotFoundError("Can't find user details.");
     }
 
     return res.status(200).json({
@@ -448,10 +526,7 @@ router.delete("/api/deleteAccount", authendicate, async (req, res) => {
       message: "Account deleted successfully.",
     });
   } catch (error) {
-    return res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    return next(error);
   }
 });
 export default router;

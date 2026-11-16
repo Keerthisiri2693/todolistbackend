@@ -1,9 +1,20 @@
 
 export function errorHandler(err, req, res, next) {
-  const statusCode = err.statusCode || 500;
-  const message = err.message || "Internal Server Error";
+  console.error("BACKEND ERROR:", err);
 
-  res.status(statusCode).json({
+  // Response already sent - do not send another response
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  const statusCode = err.statusCode || err.status || 500;
+
+  const message =
+    statusCode >= 500
+      ? "Internal Server Error"
+      : err.message || "Something went wrong";
+
+  return res.status(statusCode).json({
     success: false,
     error: message,
   });
