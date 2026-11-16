@@ -46,145 +46,71 @@ const upload = multer({ dest: "temp/" });
 // ========================================================================
 // User Register
 // ========================================================================
-
 router.post(
   "/api/userRegister",
   upload.single("profile"),
   async (req, res, next) => {
-    let uploadedFilePath = req.file?.path;
-
     try {
-      console.log("========== USER REGISTRATION STARTED ==========");
-
-      const {
-        userName,
-        email,
-        password,
-        confirmPassword,
-      } = req.body;
-
-      console.log("STEP 1: Validating user details");
+      const { userName, email, password, confirmPassword } = req.body;
 
       const normalizedEmail = normalizeEmail(email);
 
       if (!isValidEmail(normalizedEmail)) {
         throw new BadRequestError("Invalid email address");
       }
-
-      if (!userName?.trim()) {
-        throw new BadRequestError("Username is required");
-      }
-
-      if (!password || password.length < 6) {
-        throw new BadRequestError("Password must contain at least 6 characters");
-      }
-
-      if (password !== confirmPassword) {
-        throw new BadRequestError(
-          "Password and confirm password do not match."
-        );
-      }
-
-      console.log("STEP 2: Checking existing user");
-
-      const existingUser = await UserLoginCredentials.findOne({
+      const userId = await generateUniqueUserId();
+      const isUserExcist = await UserLoginCredentials.findOne({
         email: normalizedEmail,
       });
+      if (isUserExcist)
+        throw new ConflictError("This email already registered..");
 
-      if (existingUser) {
-        throw new ConflictError("This email is already registered.");
-      }
-
-      console.log("STEP 3: Generating unique user ID");
-
-      const userId = await generateUniqueUserId();
-
-      console.log("STEP 4: Processing profile image");
-
+      if (password !== confirmPassword)
+        throw new BadRequestError(
+          "Password and confirm password do not match..",
+        );
       let profilePicUrl = null;
 
       if (req.file) {
-        console.log("Uploading image to Cloudinary");
-
-        const result = await cloudinary.uploader.upload(
-          uploadedFilePath,
-          {
-            resource_type: "image",
-            folder: `ProfilePicture/Individual/${userName}-${userId}`,
-            public_id: `${userName}.${userId}_profilePic`,
-          }
-        );
-
+        const filePath = req.file.path;
+        const result = await cloudinary.uploader.upload(filePath, {
+          resource_type: "image",
+          folder: `ProfilePicture/Individual/${userName}-${userId}`,
+          public_id: `${userName}.${userId}_profilePic`,
+        });
+        fs.unlinkSync(filePath);
         profilePicUrl = result.secure_url;
-
-        console.log("Cloudinary upload successful");
       }
 
-      console.log("STEP 5: Hashing password");
-
       const hashedPassword = await bcrypt.hash(password, 10);
-
       const userData = {
         userId,
-        userName: userName.trim(),
+        userName,
         password: hashedPassword,
         profilePicUrl,
       };
 
-      console.log("STEP 6: Generating OTP");
-
+      // Generate OTP
       const code = generateCode();
 
-      console.log("STEP 7: Saving OTP in MongoDB");
+      // Save OTP in DB
+      await saveVerification(normalizedEmail, code, userData,OTP_PURPOSE.REGISTRATION);
 
-      await saveVerification(
-        normalizedEmail,
-        code,
-        userData,
-        OTP_PURPOSE.REGISTRATION
-      );
-
-      console.log("OTP saved successfully");
-
-      console.log("STEP 8: Sending OTP email");
-
+      // Send OTP via email
       await sendVerificationEmail(normalizedEmail, code);
 
-      console.log("OTP email sent successfully");
-
-      console.log("STEP 9: Sending API response");
-
-      return sendResponse(
+      sendResponse(
         res,
         new SuccessResponse(
-          "OTP sent successfully. Verify email to complete registration."
+          "OTP sent successfully. Verify email to complete registration.",
         ),
-        201
+        201,
       );
-
     } catch (error) {
-      console.error("REGISTRATION ERROR:", error.message);
-
       next(error);
-
-    } finally {
-      if (uploadedFilePath && fs.existsSync(uploadedFilePath)) {
-        try {
-          await fs.promises.unlink(uploadedFilePath);
-          console.log("Temporary profile image cleaned up");
-        } catch (cleanupError) {
-          console.error(
-            "Temporary file cleanup failed:",
-            cleanupError.message
-          );
-        }
-      }
-
-      console.log("========== REGISTRATION PROCESS ENDED ==========");
     }
-  }
+  },
 );
-
 
 // ========================================================================
 // User Mail id OTP Verification - Registration/ForgotPassword
