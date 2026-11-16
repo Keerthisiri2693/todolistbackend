@@ -1,8 +1,4 @@
 
-// ======================================================
-// ENVIRONMENT
-// ======================================================
-
 import "dotenv/config";
 
 // ======================================================
@@ -14,52 +10,39 @@ import mongoose from "mongoose";
 import cors from "cors";
 import http from "http";
 
+import { connectDB } from "./src/config/db.js";
+
 import { TodolistSchema } from "./src/models/todolistModels.js";
 import { scheduleAlarm } from "./src/Helper/alarm.js";
-
-import "./src/config/db.js"; // MongoDB + GridFS initialization
 
 import { initiateApp } from "./src/Helper/apiHelper.js";
 import { errorHandler } from "./src/middleware/errorHandler.js";
 import { seed } from "./src/routes/seedTemplates.js";
 
 // ======================================================
-// ENVIRONMENT VALIDATION
+// ENVIRONMENT
 // ======================================================
 
 const port = Number(process.env.PORT) || 5001;
 
-console.log("");
 console.log("========== ENVIRONMENT CONFIG ==========");
-
 console.log("PORT:", port);
-
-console.log("EMAIL_USER:", process.env.EMAIL_USER || "NOT CONFIGURED");
-
-console.log(
-  "EMAIL_PASS configured:",
-  Boolean(process.env.EMAIL_PASS)
-);
-
+console.log("RESEND_API_KEY configured:", Boolean(process.env.RESEND_API_KEY));
+console.log("RESEND_FROM_EMAIL configured:", Boolean(process.env.RESEND_FROM_EMAIL));
+console.log("MONGODBURI configured:", Boolean(process.env.MONGODBURI));
 console.log("========================================");
-console.log("");
 
 // ======================================================
 // PROCESS ERROR HANDLING
 // ======================================================
 
 process.on("uncaughtException", (error) => {
-  console.error("");
-  console.error("❌ UNCAUGHT EXCEPTION");
-  console.error(error);
-  console.error("");
+  console.error("UNCAUGHT EXCEPTION:", error);
+  process.exit(1);
 });
 
 process.on("unhandledRejection", (reason) => {
-  console.error("");
-  console.error("❌ UNHANDLED REJECTION");
-  console.error(reason);
-  console.error("");
+  console.error("UNHANDLED REJECTION:", reason);
 });
 
 // ======================================================
@@ -69,24 +52,14 @@ process.on("unhandledRejection", (reason) => {
 const app = express();
 
 // ======================================================
-// CORS CONFIGURATION
+// CORS
 // ======================================================
 
 app.use(
   cors({
     origin: "*",
-    methods: [
-      "GET",
-      "POST",
-      "PUT",
-      "PATCH",
-      "DELETE",
-      "OPTIONS",
-    ],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-    ],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
@@ -94,11 +67,7 @@ app.use(
 // BODY PARSER
 // ======================================================
 
-app.use(
-  express.json({
-    limit: "50mb",
-  })
-);
+app.use(express.json({ limit: "50mb" }));
 
 app.use(
   express.urlencoded({
@@ -108,33 +77,36 @@ app.use(
 );
 
 // ======================================================
-// HEALTH CHECK ROUTES
+// HEALTH CHECK
 // ======================================================
 
 app.get("/", (req, res) => {
-  res.status(200).json({
+  return res.status(200).json({
     success: true,
     message: "Todo List Backend API is running",
     status: "OK",
+    database:
+      mongoose.connection.readyState === 1
+        ? "connected"
+        : "disconnected",
   });
 });
 
 app.get("/api/userLoginOrLogout1", (req, res) => {
-  res.status(200).json({
+  return res.status(200).json({
     success: true,
     message: "Login route works!",
   });
 });
 
 // ======================================================
-// EXISTING API ROUTES
+// API ROUTES
 // ======================================================
 
 initiateApp(app);
 
 // ======================================================
-// ERROR HANDLER
-// Must be after all API routes
+// ERROR HANDLER - MUST BE LAST
 // ======================================================
 
 app.use(errorHandler);
@@ -151,7 +123,7 @@ const server = http.createServer(app);
 
 const initAlarms = async () => {
   try {
-    console.log("⏰ Initializing reminders...");
+    console.log("Initializing reminders...");
 
     const tasks = await TodolistSchema.find({
       alarm: { $ne: null },
@@ -165,20 +137,16 @@ const initAlarms = async () => {
         count++;
       } catch (error) {
         console.error(
-          "❌ Alarm scheduling failed:",
+          "Alarm scheduling failed:",
           task._id,
           error.message
         );
       }
     }
 
-    console.log(`✅ ${count} reminders initialized`);
-
+    console.log(`${count} reminders initialized`);
   } catch (error) {
-    console.error(
-      "❌ Reminder initialization failed:",
-      error
-    );
+    console.error("Reminder initialization failed:", error);
   }
 };
 
@@ -188,17 +156,13 @@ const initAlarms = async () => {
 
 const initializeTemplates = async () => {
   try {
-    console.log("🌱 Initializing templates...");
+    console.log("Initializing templates...");
 
     await seed();
 
-    console.log("✅ Template initialization completed");
-
+    console.log("Template initialization completed");
   } catch (error) {
-    console.error(
-      "❌ Template initialization failed:",
-      error
-    );
+    console.error("Template initialization failed:", error);
   }
 };
 
@@ -208,47 +172,49 @@ const initializeTemplates = async () => {
 
 const startServer = async () => {
   try {
-    server.listen(port, "0.0.0.0", async () => {
-      console.log("");
-      console.log("======================================");
-      console.log("🚀 TODO LIST BACKEND STARTED");
-      console.log("======================================");
+    // 1. Connect MongoDB first
+    console.log("Connecting to MongoDB...");
 
-      console.log(`PORT: ${port}`);
+    await connectDB();
 
-      console.log(`LOCAL: http://localhost:${port}`);
+    console.log("MongoDB connection completed.");
 
-      console.log(`LAN: http://192.168.1.8:${port}`);
+    // 2. Start HTTP server only after DB connection
+    await new Promise((resolve, reject) => {
+      const onError = (error) => {
+        server.removeListener("listening", onListening);
+        reject(error);
+      };
 
-      console.log("--------------------------------------");
+      const onListening = () => {
+        server.removeListener("error", onError);
+        resolve();
+      };
 
-      console.log(
-        `UPLOAD: http://192.168.1.8:${port}/uploads/`
-      );
+      server.once("error", onError);
+      server.once("listening", onListening);
 
-      console.log(
-        `UPLOAD TEST: http://192.168.1.8:${port}/api/upload-test`
-      );
-
-      console.log(
-        `MEDIA API: http://192.168.1.8:${port}/api/upload-media`
-      );
-
-      console.log("======================================");
-      console.log("");
-
-      // Initialize background tasks
-      await initAlarms();
-
-      await initializeTemplates();
+      server.listen(port, "0.0.0.0");
     });
 
-    server.on("error", (error) => {
-      console.error("❌ HTTP SERVER ERROR:", error);
-    });
+    console.log("======================================");
+    console.log("TODO LIST BACKEND STARTED");
+    console.log("PORT:", port);
+    console.log("DATABASE: CONNECTED");
+    console.log("======================================");
 
+    // 3. Initialize background tasks
+    await initAlarms();
+    await initializeTemplates();
+
+    console.log("Backend initialization completed.");
   } catch (error) {
-    console.error("❌ SERVER STARTUP ERROR:", error);
+    console.error("SERVER STARTUP ERROR:", error);
+
+    if (mongoose.connection.readyState !== 0) {
+      await mongoose.connection.close().catch(console.error);
+    }
+
     process.exit(1);
   }
 };
@@ -264,49 +230,38 @@ const shutdown = async (signal) => {
 
   isShuttingDown = true;
 
-  console.log("");
-  console.log(`🛑 ${signal} received. Shutting down...`);
+  console.log(`${signal} received. Shutting down...`);
 
   try {
-    // Stop accepting new HTTP connections
     if (server.listening) {
       await new Promise((resolve, reject) => {
         server.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
+          if (error) reject(error);
+          else resolve();
         });
       });
 
-      console.log("✅ HTTP server closed");
+      console.log("HTTP server closed.");
     }
 
-    // Close MongoDB connection
     if (mongoose.connection.readyState !== 0) {
       await mongoose.connection.close();
-
-      console.log("✅ MongoDB connection closed");
+      console.log("MongoDB connection closed.");
     }
 
-    console.log("✅ Server shutdown complete");
-
+    console.log("Shutdown completed.");
     process.exit(0);
-
   } catch (error) {
-    console.error("❌ Shutdown error:", error);
-
+    console.error("Shutdown error:", error);
     process.exit(1);
   }
 };
 
 // ======================================================
-// SHUTDOWN SIGNALS
+// SIGNAL HANDLERS
 // ======================================================
 
 process.on("SIGINT", () => shutdown("SIGINT"));
-
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 // ======================================================
